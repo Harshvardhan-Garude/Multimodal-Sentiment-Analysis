@@ -7,7 +7,8 @@ from .text import Tokenizer
 
 class MultimodalDataset(Dataset):
     def __init__(self, data_dir, tokenizer, split='train',
-                 use_spec_augment=False, max_text_len=96):
+                 use_spec_augment=False, max_text_len=96,
+                 audio_seconds=4.0, n_mels=64):
         self.data_dir = data_dir
         self.split = split
         self.csv_path = os.path.join(data_dir, split, 'data.csv')
@@ -31,7 +32,11 @@ class MultimodalDataset(Dataset):
         except Exception as e:
             raise RuntimeError(f"Failed to load dataset from {self.csv_path}: {e}")
 
-        self.audio_processor = AudioPreprocessor(use_spec_augment=use_spec_augment)
+        self.audio_processor = AudioPreprocessor(
+            use_spec_augment=use_spec_augment,
+            duration=audio_seconds,
+            n_mels=n_mels
+        )
 
     def __len__(self):
         return len(self.df)
@@ -39,6 +44,8 @@ class MultimodalDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         file_id = str(row['FileID'])
+        if file_id.endswith('.wav'):
+            file_id = file_id[:-4]
         text = str(row['Text'])
 
         # Audio
@@ -61,14 +68,16 @@ class MultimodalDataset(Dataset):
 
 def collate_fn(batch):
     file_ids = [item['file_id'] for item in batch]
-    audios = torch.stack([item['audio'] for item in batch])
-    texts = torch.stack([item['text'] for item in batch])
 
     out = {
         'file_id': file_ids,
-        'audio': audios,
-        'text': texts
     }
+
+    if 'audio' in batch[0] and batch[0]['audio'] is not None:
+        out['audio'] = torch.stack([item['audio'] for item in batch])
+
+    if 'text' in batch[0] and batch[0]['text'] is not None:
+        out['text'] = torch.stack([item['text'] for item in batch])
 
     if 'label' in batch[0]:
         out['label'] = torch.stack([item['label'] for item in batch])

@@ -1,4 +1,7 @@
 import os
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+
 import argparse
 import pandas as pd
 import torch
@@ -13,7 +16,7 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_dir', type=str, default='.')
     parser.add_argument('--ckpts', type=str, required=True, help='Comma separated list of checkpoint paths')
-    parser.add_argument('--output', type=str, default='test.txt', help='Output predictions file')
+    parser.add_argument('--out', type=str, default='test.txt', help='Output predictions file')
     parser.add_argument('--batch_size', type=int, default=32)
     return parser.parse_args()
 
@@ -25,9 +28,11 @@ def load_model(ckpt_path, device, vocab_size):
     # number of classes assumed to be 3 based on instructions
     model = MultimodalClassifier(
         vocab_size=vocab_size,
-        modality=args.modality,
-        text_encoder_type=args.text_encoder,
-        num_classes=3
+        modality=getattr(args, 'modality', 'both'),
+        text_encoder_type=getattr(args, 'text_encoder', 'lstm'),
+        num_classes=3,
+        dropout=getattr(args, 'dropout', 0.2),
+        hidden_dim=getattr(args, 'hidden_dim', 256)
     )
 
     model.load_state_dict(ckpt['model_state_dict'])
@@ -37,7 +42,12 @@ def load_model(ckpt_path, device, vocab_size):
 
 def main():
     args = parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
 
     ckpt_paths = args.ckpts.split(',')
 
@@ -56,26 +66,40 @@ def main():
 
     vocab_size = len(tokenizer.vocab)
 
+    # Infer doesn't naturally get max_text_len, audio_seconds, n_mels via CLI
+    # It gets them from the loaded checkpoint's args
+    # But since we might load multiple ckpts, we assume they all share these hyperparams
+    # We will pick them from the first model's args.
+    model, ckpt_args = load_model(ckpt_paths[0], device, vocab_size)
+    models = [model]
+
+    for ckpt_path in ckpt_paths[1:]:
+        m, _ = load_model(ckpt_path, device, vocab_size)
+        models.append(m)
+
     # Load test dataset
     print("Loading test dataset...")
     test_dataset = MultimodalDataset(
         args.data_dir, tokenizer, split='test',
-        use_spec_augment=False
+        use_spec_augment=False,
+        max_text_len=getattr(ckpt_args, 'max_text_len', 96),
+        audio_seconds=getattr(ckpt_args, 'audio_seconds', 4.0),
+        n_mels=getattr(ckpt_args, 'n_mels', 64)
     )
     test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn, num_workers=0)
-
-    models = []
-    for ckpt_path in ckpt_paths:
-        model, ckpt_args = load_model(ckpt_path, device, vocab_size)
-        models.append(model)
 
     print("Running inference...")
     all_preds = []
 
     with torch.no_grad():
         for batch in test_loader:
-            audio = batch['audio'].to(device)
-            text = batch['text'].to(device)
+            audio = batch.get('audio', None)
+            if audio is not None:
+                audio = audio.to(device)
+
+            text = batch.get('text', None)
+            if text is not None:
+                text = text.to(device)
 
             # Aggregate probabilities across all models
             batch_probs = []
@@ -91,8 +115,8 @@ def main():
 
     # Write predictions to output file
     # Ensure they are in exact order
-    print(f"Writing {len(all_preds)} predictions to {args.output}...")
-    with open(args.output, 'w') as f:
+    print(f"Writing {len(all_preds)} predictions to {args.out}...")
+    with open(args.out, 'w') as f:
         for p in all_preds:
             f.write(f"{p}\\n")
 

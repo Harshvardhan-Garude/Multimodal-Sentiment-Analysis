@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 
 class AudioEncoder(nn.Module):
-    def __init__(self, emb_dim=256):
+    def __init__(self, emb_dim=256, dropout=0.2):
         super().__init__()
         # Input shape: (B, 1, 64, T)
         self.conv1 = nn.Sequential(
@@ -31,6 +31,7 @@ class AudioEncoder(nn.Module):
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((1, 1))
         )
+        self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(256, emb_dim)
 
     def forward(self, x):
@@ -41,6 +42,7 @@ class AudioEncoder(nn.Module):
         x = self.conv4(x)
         # Global Average Pooling result: (B, 256, 1, 1)
         x = x.view(x.size(0), -1)
+        x = self.dropout(x)
         x = self.fc(x)
         return x
 
@@ -115,22 +117,26 @@ class TextEncoderTransformer(nn.Module):
 
 class MultimodalClassifier(nn.Module):
     def __init__(self, vocab_size, modality='both', text_encoder_type='lstm',
-                 audio_dim=256, text_dim=512, num_classes=3, dropout=0.3):
+                 audio_dim=256, text_dim=512, num_classes=3, dropout=0.3, hidden_dim=256):
         super().__init__()
         self.modality = modality
         self.text_encoder_type = text_encoder_type
+
+        # Adjust dimensions based on hidden_dim
+        audio_dim = hidden_dim
+        text_dim = hidden_dim * 2
 
         self.audio_encoder = None
         self.text_encoder = None
 
         if modality in ['audio', 'both']:
-            self.audio_encoder = AudioEncoder(emb_dim=audio_dim)
+            self.audio_encoder = AudioEncoder(emb_dim=audio_dim, dropout=dropout)
 
         if modality in ['text', 'both']:
             if text_encoder_type == 'lstm':
-                self.text_encoder = TextEncoderLSTM(vocab_size=vocab_size, out_dim=text_dim)
+                self.text_encoder = TextEncoderLSTM(vocab_size=vocab_size, hidden_dim=hidden_dim, dropout=dropout, out_dim=text_dim)
             elif text_encoder_type == 'transformer':
-                self.text_encoder = TextEncoderTransformer(vocab_size=vocab_size, out_dim=text_dim)
+                self.text_encoder = TextEncoderTransformer(vocab_size=vocab_size, d_model=hidden_dim, dropout=dropout, out_dim=text_dim)
             else:
                 raise ValueError(f"Unknown text_encoder_type: {text_encoder_type}")
 
