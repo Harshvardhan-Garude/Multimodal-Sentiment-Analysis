@@ -51,6 +51,13 @@ python -m src.train --data_dir ./data --seeds 42,43,44 --modality both --epochs 
 
 ## Inference
 
+Current limitation: `src/infer.py` writes a literal `\\n` after each prediction
+instead of a newline. Correct the output writer and verify one prediction per
+line before using the generated `test.txt`. Inference also rebuilds a default
+tokenizer rather than restoring its settings from the checkpoint, so custom
+training vocabulary or sequence-length settings need matching inference support.
+
+
 Run inference and generate `test.txt` using saved checkpoints.
 
 ### Single Model Inference
